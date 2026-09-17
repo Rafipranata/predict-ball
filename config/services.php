@@ -34,6 +34,10 @@ return [
             'channel' => env('SLACK_BOT_USER_DEFAULT_CHANNEL'),
         ],
     ],
+    'football_data' => [
+        'key' => env('FOOTBALL_DATA_KEY'),
+        'url' => 'https://api.football-data.org/v4/',
+    ],
     'highlightly' => [
         'key' => env('HIGHLIGHTLY_KEY'),
         'url' => 'https://soccer.highlightly.net',

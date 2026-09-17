@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\FootballMatchService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -9,60 +10,68 @@ use Illuminate\Support\Facades\Log;
 
 class HighlightController extends Controller
 {
-public function index(Request $request)
-{
-    $cacheKey = 'soccer_highlights_season_2026_all';
+    public function index(Request $request, FootballMatchService $footballMatchService)
+    {
+        $cacheKey = 'soccer_highlights_season_2026_all';
 
-    $highlights = Cache::remember($cacheKey, 600, function () {
-        try {
-            $baseUrl = rtrim(config('services.highlightly.url'), '/');
-            $host = parse_url($baseUrl, PHP_URL_HOST) ?? 'football-highlights-api.p.rapidapi.com';
+        $highlights = Cache::remember($cacheKey, 600, function () {
+            try {
+                $baseUrl = rtrim(config('services.highlightly.url'), '/');
+                $host = parse_url($baseUrl, PHP_URL_HOST) ?? 'football-highlights-api.p.rapidapi.com';
 
-            // Tarik semua cuplikan laga musim 2026 tanpa filter liga/negara
-            $queryParams = [
-                'season' => 2026,
-                'limit'  => 30, // Ambil kuota agak banyak sebelum disaring YouTube
-            ];
+                // Tarik semua cuplikan laga musim 2026 tanpa filter liga/negara
+                $queryParams = [
+                    'season' => 2026,
+                    'limit'  => 30, // Ambil kuota agak banyak sebelum disaring YouTube
+                ];
 
-            $response = Http::withHeaders([
-                'x-rapidapi-key'  => config('services.highlightly.key'),
-                'x-rapidapi-host' => $host,
-            ])->timeout(10)->get($baseUrl . '/highlights', $queryParams);
+                $response = Http::withHeaders([
+                    'x-rapidapi-key'  => config('services.highlightly.key'),
+                    'x-rapidapi-host' => $host,
+                ])->timeout(10)->get($baseUrl . '/highlights', $queryParams);
 
-            if ($response->successful()) {
-                $data = $response->json()['data'] ?? [];
+                if ($response->successful()) {
+                    $data = $response->json()['data'] ?? [];
 
-                if (! empty($data)) {
-                    // Validasi: hanya ambil data yang memiliki embed video YouTube
-                    $youtubeHighlights = collect($data)->filter(function ($item) {
-                        $embed = $item['embedUrl'] ?? '';
-                        return ! empty($embed) && (
-                            str_contains($embed, 'youtube.com') ||
-                            str_contains($embed, 'youtu.be') ||
-                            str_contains($embed, 'youtube-nocookie.com')
-                        );
-                    })->values()->all();
+                    if (! empty($data)) {
+                        // Validasi: hanya ambil data yang memiliki embed video YouTube
+                        $youtubeHighlights = collect($data)->filter(function ($item) {
+                            $embed = $item['embedUrl'] ?? '';
+                            return ! empty($embed) && (
+                                str_contains($embed, 'youtube.com') ||
+                                str_contains($embed, 'youtu.be') ||
+                                str_contains($embed, 'youtube-nocookie.com')
+                            );
+                        })->values()->all();
 
-                    if (! empty($youtubeHighlights)) {
-                        return $youtubeHighlights;
+                        if (! empty($youtubeHighlights)) {
+                            return $youtubeHighlights;
+                        }
                     }
                 }
+
+                Log::warning('Highlightly live data kosong atau non-200', [
+                    'status' => $response->status(),
+                    'body'   => $response->json(),
+                ]);
+            } catch (\Throwable $e) {
+                Log::error('Highlightly API exception: ' . $e->getMessage());
             }
 
-            Log::warning('Highlightly live data kosong atau non-200', [
-                'status' => $response->status(),
-                'body'   => $response->json(),
-            ]);
-        } catch (\Throwable $e) {
-            Log::error('Highlightly API exception: ' . $e->getMessage());
-        }
+            // Fallback jika API gagal atau kosong
+            return $this->getFallbackHighlights('All');
+        });
 
-        // Fallback jika API gagal atau kosong
-        return $this->getFallbackHighlights('All');
-    });
+        // Ambil data jadwal pertandingan besok hari dari Football-Data API v4
+        $matchesPayload = $footballMatchService->getTodaysMatchesData();
+        $todaysMatches = $matchesPayload['matches'] ?? [];
+        $matchCategories = $matchesPayload['categories'] ?? [];
+        $totalMatches = $matchesPayload['total'] ?? count($todaysMatches);
+        $matchesSource = $matchesPayload['source'] ?? 'live_api';
+        $targetDateFormatted = $matchesPayload['targetDateFormatted'] ?? 'Besok';
 
-    return view('main', compact('highlights'));
-}
+        return view('main', compact('highlights', 'todaysMatches', 'matchCategories', 'totalMatches', 'matchesSource', 'targetDateFormatted'));
+    }
 
     /**
      * Menyediakan cuplikan video kurasi berkualitas tinggi spesifik per kategori
