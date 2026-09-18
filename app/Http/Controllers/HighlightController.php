@@ -62,15 +62,20 @@ class HighlightController extends Controller
             return $this->getFallbackHighlights('All');
         });
 
-        // Ambil data jadwal pertandingan besok hari dari Football-Data API v4
-        $matchesPayload = $footballMatchService->getTodaysMatchesData();
+        // Ambil data jadwal pertandingan (hari-ini sebagai default) dari Football-Data API v4
+        $currentDay = $request->query('day', 'hari-ini');
+        if (! in_array($currentDay, ['kemarin', 'hari-ini', 'besok'])) {
+            $currentDay = 'hari-ini';
+        }
+
+        $matchesPayload = $footballMatchService->getMatchesByDay($currentDay);
         $todaysMatches = $matchesPayload['matches'] ?? [];
         $matchCategories = $matchesPayload['categories'] ?? [];
         $totalMatches = $matchesPayload['total'] ?? count($todaysMatches);
         $matchesSource = $matchesPayload['source'] ?? 'live_api';
-        $targetDateFormatted = $matchesPayload['targetDateFormatted'] ?? 'Besok';
+        $targetDateFormatted = $matchesPayload['targetDateFormatted'] ?? 'Hari Ini';
 
-        return view('main', compact('highlights', 'todaysMatches', 'matchCategories', 'totalMatches', 'matchesSource', 'targetDateFormatted'));
+        return view('main', compact('highlights', 'todaysMatches', 'matchCategories', 'totalMatches', 'matchesSource', 'targetDateFormatted', 'currentDay'));
     }
 
     /**

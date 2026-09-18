@@ -6,30 +6,48 @@
                 <div class="flex flex-col md:flex-row md:items-end justify-between mb-8 gap-4">
                     <div class="space-y-2">
                         <h2 class="text-2xl sm:text-4xl font-extrabold text-white tracking-tight">
-                            Jadwal Pertandingan
+                            Hasil & Jadwal Pertandingan
                         </h2>
                         <p class="text-sm sm:text-base text-slate-400 max-w-2xl">
-                            Tinjau jadwal pertandingan besok hari dan estimasi peluang hasil
-                            pertandingan berdasarkan kalkulasi model NataAI.
+                            Tinjau jadwal pertandingan hari ini dan hasil laga terkini beserta kalkulasi probabilitas model NataAI.
                         </p>
                     </div>
 
-                    <div class="text-xs font-mono text-slate-400 shrink-0">
-                        Zona Waktu: <strong class="text-white">WIB (GMT+7)</strong>
+                    <div class="flex flex-col sm:flex-row sm:items-center gap-3">
+                        <!-- Day Selector Filter (Default Hari Ini) -->
+                        <div class="inline-flex p-1 rounded-xl bg-[#0e1f1e] border border-[#285A48] text-xs font-semibold">
+                            <a href="?day=kemarin#jadwal"
+                                class="px-3 py-1.5 rounded-lg transition-all duration-200 {{ ($currentDay ?? 'hari-ini') === 'kemarin' ? 'bg-[#408A71] text-white shadow-sm' : 'text-slate-400 hover:text-white' }}">
+                                Kemarin
+                            </a>
+                            <a href="?day=hari-ini#jadwal"
+                                class="px-3 py-1.5 rounded-lg transition-all duration-200 {{ ($currentDay ?? 'hari-ini') === 'hari-ini' ? 'bg-[#408A71] text-white shadow-sm' : 'text-slate-400 hover:text-white' }}">
+                                Hari Ini
+                            </a>
+                            <a href="?day=besok#jadwal"
+                                class="px-3 py-1.5 rounded-lg transition-all duration-200 {{ ($currentDay ?? 'hari-ini') === 'besok' ? 'bg-[#408A71] text-white shadow-sm' : 'text-slate-400 hover:text-white' }}">
+                                Besok
+                            </a>
+                        </div>
                     </div>
                 </div>
 
                 <!-- Filter Bar & Search Controls (Matte Clean) -->
                 <div class="mb-8 space-y-4">
                     <div class="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4">
-
-                        <!-- Category Pills (Horizontal Scroll on Mobile) -->
                         <div class="flex items-center gap-2 overflow-x-auto no-scrollbar pb-2 lg:pb-0 scroll-smooth"
                             id="category-tabs">
                             @foreach($matchCategories ?? [] as $category)
                                 <button type="button" data-category="{{ $category['slug'] }}"
                                     class="category-btn {{ $loop->first ? 'active bg-[#408A71] border-[#408A71] text-white' : 'border-[#285A48] bg-[#0e1f1e] text-slate-300 hover:text-white hover:border-[#408A71]' }} px-4 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all duration-200 flex items-center gap-2 border">
-                                    <span>{{ $category['icon'] }} {{ $category['name'] }}</span>
+                                    @if(!empty($category['emblem']))
+                                        <img src="{{ $category['emblem'] }}" alt="{{ $category['name'] }}" class="w-4 h-4 object-contain shrink-0 drop-shadow-sm" loading="lazy" onerror="this.style.display='none'" />
+                                    @elseif($category['slug'] === 'all')
+                                        <span class="text-sm shrink-0"></span>
+                                    @else
+                                        <span class="text-sm shrink-0"></span>
+                                    @endif
+                                    <span class="category-name">{{ $category['name'] }}</span>
                                     <span
                                         class="category-badge px-1.5 py-0.5 rounded-full text-[10px] {{ $loop->first ? 'bg-[#285A48] text-white' : 'bg-[#091413] text-slate-400' }}">{{ $category['count'] }}</span>
                                 </button>
@@ -64,7 +82,7 @@
                         class="flex items-center justify-between text-xs font-mono text-slate-400 border-t border-[#285A48] pt-3">
                         <div class="flex items-center gap-2 flex-wrap">
                             <span>Menampilkan <strong id="visible-match-count" class="text-[#408A71] font-bold">{{ $totalMatches ?? count($todaysMatches ?? []) }}</strong>
-                            pertandingan ({{ $targetDateFormatted }})
+                            pertandingan (<span class="text-white">{{ $targetDateFormatted }}</span>)</span>
                         </div>
                         <div class="hidden sm:block text-[11px] text-slate-400">
                             Klik kartu untuk bertanya taktik spesifik ke Chatbot
@@ -115,12 +133,8 @@
                                         </div>
                                         <div class="flex items-center gap-2 shrink-0">
                                             @if(isset($match['score']['home']) && is_numeric($match['score']['home']))
-                                                <span class="text-base font-extrabold font-mono px-2.5 py-0.5 rounded-lg bg-slate-900 text-emerald-400 border border-slate-800">
+                                                <span class="text-base font-extrabold font-mono px-3 py-0.5 rounded-lg {{ ($match['score']['home'] > ($match['score']['away'] ?? -1)) ? 'bg-[#408A71]/25 text-emerald-300 border border-[#408A71]' : 'bg-slate-900 text-slate-300 border border-slate-800' }}">
                                                     {{ $match['score']['home'] }}
-                                                </span>
-                                            @else
-                                                <span class="text-xs font-mono px-2 py-0.5 rounded bg-slate-900 text-slate-300">
-                                                    xG: {{ $match['predictions']['homeXg'] }}
                                                 </span>
                                             @endif
                                         </div>
@@ -140,12 +154,8 @@
                                         </div>
                                         <div class="flex items-center gap-2 shrink-0">
                                             @if(isset($match['score']['away']) && is_numeric($match['score']['away']))
-                                                <span class="text-base font-extrabold font-mono px-2.5 py-0.5 rounded-lg bg-slate-900 text-emerald-400 border border-slate-800">
+                                                <span class="text-base font-extrabold font-mono px-3 py-0.5 rounded-lg {{ ($match['score']['away'] > ($match['score']['home'] ?? -1)) ? 'bg-[#408A71]/25 text-emerald-300 border border-[#408A71]' : 'bg-slate-900 text-slate-300 border border-slate-800' }}">
                                                     {{ $match['score']['away'] }}
-                                                </span>
-                                            @else
-                                                <span class="text-xs font-mono px-2 py-0.5 rounded bg-slate-900 text-slate-300">
-                                                    xG: {{ $match['predictions']['awayXg'] }}
                                                 </span>
                                             @endif
                                         </div>
@@ -197,9 +207,9 @@
                     @empty
                         <div class="col-span-full py-12 px-4 rounded-2xl bg-[#0e1f1e] border border-[#285A48] text-center space-y-3">
                             <div class="text-3xl">⚽</div>
-                            <h3 class="text-base font-bold text-white">Tidak ada jadwal pertandingan hari ini</h3>
+                            <h3 class="text-base font-bold text-white">Tidak ada data pertandingan untuk {{ $targetDateFormatted }}</h3>
                             <p class="text-xs text-slate-400 max-w-md mx-auto">
-                                Kompetisi yang terdaftar pada akun API sedang tidak memiliki jadwal laga aktif untuk hari ini. Silakan periksa kembali beberapa saat lagi.
+                                Kompetisi yang terdaftar sedang tidak memiliki jadwal laga aktif untuk periode ini. Silakan periksa pilihan hari lainnya.
                             </p>
                         </div>
                     @endforelse

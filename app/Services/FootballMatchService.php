@@ -11,49 +11,60 @@ use Illuminate\Support\Facades\Log;
 class FootballMatchService
 {
     /**
-     * Mengambil semua jadwal laga besok hari (misal tanggal 18 maka tanggal 19) dari API Football-Data v4
-     * Endpoint:
-     * - https://api.football-data.org/v4/matches?dateFrom={today}&dateTo={tomorrow}
-     * - https://api.football-data.org/v4/competitions/{code}/matches (PL, SA, BL1, FL1, DED, CL)
+     * Mengambil data pertandingan berdasarkan hari:
+     * - 'hari-ini' (default): H (hari ini)
+     * - 'kemarin': H-1 (kemarin)
+     * - 'besok': H+1 (besok)
      *
-     * @return array{matches: array, categories: array, total: int, source: string, targetDate: string, targetDateFormatted: string}
+     * @return array{matches: array, categories: array, total: int, source: string, targetDate: string, targetDateFormatted: string, currentDay: string}
      */
-    public function getTodaysMatchesData(): array
+    public function getMatchesByDay(string $day = 'hari-ini'): array
     {
+        $day = strtolower(trim($day));
+        if (! in_array($day, ['kemarin', 'hari-ini', 'besok'])) {
+            $day = 'hari-ini';
+        }
+
         $tz = new DateTimeZone('Asia/Jakarta');
         $now = new DateTime('now', $tz);
-        $tomorrow = (clone $now)->modify('+1 day');
-        $tomorrowDateStr = $tomorrow->format('Y-m-d');
+
+        $targetDate = match ($day) {
+            'kemarin'  => (clone $now)->modify('-1 day'),
+            'hari-ini' => clone $now,
+            'besok'    => (clone $now)->modify('+1 day'),
+        };
+
+        $targetDateStr = $targetDate->format('Y-m-d');
         $todayDateStr = $now->format('Y-m-d');
 
-        $dayMap = [
-            'Sun' => 'Minggu', 'Mon' => 'Senin', 'Tue' => 'Selasa', 'Wed' => 'Rabu',
-            'Thu' => 'Kamis', 'Fri' => 'Jumat', 'Sat' => 'Sabtu',
-        ];
         $monthMap = [
             '01' => 'Jan', '02' => 'Feb', '03' => 'Mar', '04' => 'Apr',
             '05' => 'Mei', '06' => 'Jun', '07' => 'Jul', '08' => 'Agu',
             '09' => 'Sep', '10' => 'Okt', '11' => 'Nov', '12' => 'Des',
         ];
-        $tomorrowFormatted = ($dayMap[$tomorrow->format('D')] ?? $tomorrow->format('D')) . ', ' .
-                             $tomorrow->format('d') . ' ' .
-                             ($monthMap[$tomorrow->format('m')] ?? $tomorrow->format('M')) . ' ' .
-                             $tomorrow->format('Y');
 
-        $cacheKey = "football_data_tomorrow_{$tomorrowDateStr}_v10";
+        $targetDateFormatted = $targetDate->format('d') . ' ' .
+                             ($monthMap[$targetDate->format('m')] ?? $targetDate->format('M')) . ' ' .
+                             $targetDate->format('Y');
 
-        return Cache::remember($cacheKey, 300, function () use ($tz, $now, $todayDateStr, $tomorrowDateStr, $tomorrowFormatted) {
+        $cacheKey = "football_data_day_{$day}_{$targetDateStr}_v14";
+
+        return Cache::remember($cacheKey, 300, function () use ($tz, $now, $targetDate, $targetDateStr, $todayDateStr, $targetDateFormatted, $day) {
             $merged = [];
 
-            // 1. Ambil laga rentang hari ini dan besok dari /matches
-            foreach ($this->fetchMatchesWindowRaw($todayDateStr, $tomorrowDateStr) as $m) {
+            // Rentang pencarian: 1 hari sebelum target hingga 1 hari setelah target untuk mencakup pergeseran UTC ke WIB (+7)
+            $dateFrom = (clone $targetDate)->modify('-1 day')->format('Y-m-d');
+            $dateTo = (clone $targetDate)->modify('+1 day')->format('Y-m-d');
+
+            // 1. Ambil laga rentang tanggal dari /matches
+            foreach ($this->fetchMatchesWindowRaw($dateFrom, $dateTo) as $m) {
                 if (isset($m['id'])) {
                     $merged[$m['id']] = $m;
                 }
             }
 
-            // 2. Ambil laga kompetisi: Premier League (PL), Serie A (SA), Bundesliga (BL1), Ligue 1 (FL1), Eredivisie (DED), Champions League (CL)
-            $competitions = ['PL', 'SA', 'BL1', 'FL1', 'DED', 'CL'];
+            // 2. Ambil laga kompetisi
+            $competitions = ['PL', 'PD', 'SA', 'BL1', 'FL1', 'DED', 'CL'];
             foreach ($competitions as $code) {
                 foreach ($this->fetchCompetitionMatchesRaw($code) as $m) {
                     if (isset($m['id'])) {
@@ -62,8 +73,8 @@ class FootballMatchService
                 }
             }
 
-            // 3. Saring secara presisi pertandingan untuk BESOK HARI (zona waktu WIB atau UTC)
-            $tomorrowMatches = [];
+            // 3. Saring secara presisi pertandingan untuk TARGET DATE (zona waktu WIB atau UTC)
+            $matched = [];
             foreach ($merged as $m) {
                 $utc = $m['utcDate'] ?? '';
                 if (empty($utc)) {
@@ -80,15 +91,14 @@ class FootballMatchService
 
                 $utcDate = substr($utc, 0, 10);
 
-                // Cocokkan jika tanggal WIB atau UTC adalah tanggal besok
-                if ($wibDate === $tomorrowDateStr || $utcDate === $tomorrowDateStr) {
-                    $tomorrowMatches[$m['id']] = $m;
+                if ($wibDate === $targetDateStr || $utcDate === $targetDateStr) {
+                    $matched[$m['id']] = $m;
                 }
             }
 
-            // Jika ada laga besok hari
-            if (! empty($tomorrowMatches)) {
-                $rawList = array_values($tomorrowMatches);
+            // Jika ada laga pada target date
+            if (! empty($matched)) {
+                $rawList = array_values($matched);
                 $processedMatches = $this->transformMatches($rawList);
                 $sortedMatches = $this->sortMatches($processedMatches);
                 $categories = $this->extractCategories($sortedMatches);
@@ -98,47 +108,50 @@ class FootballMatchService
                     'categories'          => $categories,
                     'total'               => count($sortedMatches),
                     'source'              => 'live_api',
-                    'targetDate'          => $tomorrowDateStr,
-                    'targetDateFormatted' => $tomorrowFormatted,
+                    'targetDate'          => $targetDateStr,
+                    'targetDateFormatted' => $targetDateFormatted,
+                    'currentDay'          => $day,
                 ];
             }
 
-            // Fallback cerdas: Jika besok kebetulan libur/jeda internasional, cari jadwal laga terdekat berikutnya
-            $upcomingMatches = [];
-            $maxFutureDate = (clone $now)->modify('+5 days')->format('Y-m-d');
-            foreach ($merged as $m) {
-                $utc = $m['utcDate'] ?? '';
-                if (empty($utc)) continue;
-                try {
-                    $dt = new DateTime($utc);
-                    $dt->setTimezone($tz);
-                    $wibDate = $dt->format('Y-m-d');
-                } catch (\Throwable) {
-                    $wibDate = '';
+            // Fallback cerdas: Jika kemarin kebetulan libur/jeda, cari laga selesai (FINISHED) terdekat sebelumnya
+            if ($day === 'kemarin') {
+                $nearbyPast = [];
+                $minPastDate = (clone $now)->modify('-7 days')->format('Y-m-d');
+                foreach ($merged as $m) {
+                    $utc = $m['utcDate'] ?? '';
+                    if (empty($utc)) continue;
+                    try {
+                        $dt = new DateTime($utc);
+                        $dt->setTimezone($tz);
+                        $wibDate = $dt->format('Y-m-d');
+                    } catch (\Throwable) {
+                        $wibDate = '';
+                    }
+                    if ($wibDate <= $targetDateStr && $wibDate >= $minPastDate) {
+                        $nearbyPast[$m['id']] = $m;
+                    }
                 }
-                if ($wibDate >= $tomorrowDateStr && $wibDate <= $maxFutureDate) {
-                    $upcomingMatches[$m['id']] = $m;
+                if (! empty($nearbyPast)) {
+                    $rawList = array_values($nearbyPast);
+                    $processedMatches = $this->transformMatches($rawList);
+                    $sortedMatches = $this->sortMatches($processedMatches);
+                    $categories = $this->extractCategories($sortedMatches);
+
+                    return [
+                        'matches'             => $sortedMatches,
+                        'categories'          => $categories,
+                        'total'               => count($sortedMatches),
+                        'source'              => 'live_api',
+                        'targetDate'          => $targetDateStr,
+                        'targetDateFormatted' => $targetDateFormatted,
+                        'currentDay'          => $day,
+                    ];
                 }
             }
 
-            if (! empty($upcomingMatches)) {
-                $rawList = array_values($upcomingMatches);
-                $processedMatches = $this->transformMatches($rawList);
-                $sortedMatches = $this->sortMatches($processedMatches);
-                $categories = $this->extractCategories($sortedMatches);
-
-                return [
-                    'matches'             => $sortedMatches,
-                    'categories'          => $categories,
-                    'total'               => count($sortedMatches),
-                    'source'              => 'live_api',
-                    'targetDate'          => $tomorrowDateStr,
-                    'targetDateFormatted' => $tomorrowFormatted,
-                ];
-            }
-
-            // Fallback terkurasi dengan tanggal besok
-            $fallback = $this->getFallbackMatches($tomorrowDateStr);
+            // Fallback terkurasi
+            $fallback = $this->getFallbackMatches($targetDateStr, $day);
             $categories = $this->extractCategories($fallback);
 
             return [
@@ -146,10 +159,19 @@ class FootballMatchService
                 'categories'          => $categories,
                 'total'               => count($fallback),
                 'source'              => 'fallback',
-                'targetDate'          => $tomorrowDateStr,
-                'targetDateFormatted' => $tomorrowFormatted,
+                'targetDate'          => $targetDateStr,
+                'targetDateFormatted' => $targetDateFormatted,
+                'currentDay'          => $day,
             ];
         });
+    }
+
+    /**
+     * Backward compatibility method
+     */
+    public function getTodaysMatchesData(): array
+    {
+        return $this->getMatchesByDay('hari-ini');
     }
 
     /**
@@ -270,9 +292,6 @@ class FootballMatchService
             // Probabilitas AI & Estimasi xG (dihitung deterministik dari match ID untuk konsistensi)
             $predictions = $this->calculatePredictions($id, $homeName, $awayName, $status, $score);
 
-            // AI Insight singkat
-            $insight = $this->generateAiInsight($homeName, $awayName, $competition['name'] ?? '', $predictions);
-
             // Kata kunci pencarian
             $searchTerms = strtolower(implode(' ', array_filter([
                 $homeName,
@@ -328,7 +347,6 @@ class FootballMatchService
                     'winner'   => $score['winner'] ?? null,
                 ],
                 'predictions'    => $predictions,
-                'aiInsight'      => $insight,
                 'searchKeywords' => $searchTerms,
             ];
         }
@@ -394,27 +412,28 @@ class FootballMatchService
      */
     private function buildStatusBadge(string $status, array $wibTimeInfo, array $score): array
     {
-        $homeScore = $score['fullTime']['home'];
-        $awayScore = $score['fullTime']['away'];
+        $homeScore = $score['fullTime']['home'] ?? ($score['home'] ?? null);
+        $awayScore = $score['fullTime']['away'] ?? ($score['away'] ?? null);
 
         switch ($status) {
             case 'IN_PLAY':
             case 'PAUSED':
+                $liveScore = (is_numeric($homeScore) && is_numeric($awayScore)) ? "LIVE {$homeScore} - {$awayScore}" : '🔴 LIVE';
                 return [
-                    'label'     => is_numeric($homeScore) ? "LIVE {$homeScore} - {$awayScore}" : '🔴 LIVE',
+                    'label'     => $liveScore,
                     'isLive'    => true,
                     'isFinished'=> false,
-                    'color'     => 'text-red-400 bg-red-500/10 border-red-500/30',
+                    'color'     => 'text-red-400 bg-red-500/10 border-red-500/30 font-bold animate-pulse',
                 ];
 
             case 'FINISHED':
             case 'AWARDED':
-                $scoreText = is_numeric($homeScore) ? "FT {$homeScore} - {$awayScore}" : 'FT (Selesai)';
+                $scoreText = (is_numeric($homeScore) && is_numeric($awayScore)) ? "FT: {$homeScore} - {$awayScore}" : 'FT (Selesai)';
                 return [
                     'label'     => $scoreText,
                     'isLive'    => false,
                     'isFinished'=> true,
-                    'color'     => 'text-slate-300 bg-slate-800/80 border-slate-700',
+                    'color'     => 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30 font-bold',
                 ];
 
             case 'POSTPONED':
@@ -567,62 +586,51 @@ class FootballMatchService
     }
 
     /**
-     * Menghasilkan teks AI Insight analitis
-     */
-    private function generateAiInsight(string $home, string $away, string $comp, array $pred): string
-    {
-        $homeProb = $pred['homeProb'];
-        $homeXg = $pred['homeXg'];
-        $awayXg = $pred['awayXg'];
-
-        if ($homeProb >= 50) {
-            return "Model AI NataAI mendeteksi dominasi intensitas pressing {$home} di kandang dengan proyeksi xG {$homeXg}. Peluang kemenangan tuan rumah tergolong tinggi.";
-        } elseif ($pred['awayProb'] >= 40) {
-            return "Kekuatan transisi serangan balik {$away} dinilai efektif (proyeksi xG {$awayXg}). Berpotensi merepotkan lini pertahanan tuan rumah.";
-        } else {
-            return "Laga seimbang dengan tempo taktis terukur. Margin peluang gol tipis (xG {$homeXg} vs {$awayXg}), hasil imbang atau skor ketat berpeluang besar.";
-        }
-    }
-
-    /**
      * Ekstrak tab kategori dinamis dari pertandingan yang didapat
      */
     private function extractCategories(array $matches): array
     {
         $categories = [
             'all' => [
-                'slug'  => 'all',
-                'name'  => 'Semua Laga',
-                'icon'  => '🌍',
-                'count' => count($matches),
+                'slug'   => 'all',
+                'name'   => 'Semua Laga',
+                'emblem' => '',
+                'icon'   => '🌍',
+                'count'  => count($matches),
             ],
         ];
 
-        // Definisi prioritas dan penamaan rapi untuk kategori liga
+        // Definisi prioritas, emblem logo resmi kompetisi, dan penamaan rapi
         $priorityMeta = [
-            'premier-league'    => ['name' => 'Premier League', 'icon' => '🏴󠁧󠁢󠁥󠁮󠁧󠁿'],
-            'serie-a'           => ['name' => 'Serie A', 'icon' => '🇮🇹'],
-            'bundesliga'        => ['name' => 'Bundesliga', 'icon' => '🇩🇪'],
-            'ligue-1'           => ['name' => 'Ligue 1', 'icon' => '🇫🇷'],
-            'eredivisie'        => ['name' => 'Eredivisie', 'icon' => '🇳🇱'],
-            'champions-league'  => ['name' => 'Champions League', 'icon' => '⭐'],
-            'laliga'            => ['name' => 'La Liga', 'icon' => '🇪🇸'],
-            'copa-libertadores' => ['name' => 'Copa Libertadores', 'icon' => '🏆'],
-            'liga-1'            => ['name' => 'BRI Liga 1', 'icon' => '🇮🇩'],
+            'premier-league'    => ['name' => 'Premier League', 'emblem' => 'https://crests.football-data.org/PL.png', 'icon' => '🏴󠁧󠁢󠁥󠁮󠁧󠁿'],
+            'laliga'            => ['name' => 'La Liga', 'emblem' => 'https://crests.football-data.org/laliga.png', 'icon' => '🇪🇸'],
+            'serie-a'           => ['name' => 'Serie A', 'emblem' => 'https://crests.football-data.org/SA.png', 'icon' => '🇮🇹'],
+            'bundesliga'        => ['name' => 'Bundesliga', 'emblem' => 'https://crests.football-data.org/BL1.png', 'icon' => '🇩🇪'],
+            'champions-league'  => ['name' => 'Champions League', 'emblem' => 'https://crests.football-data.org/CL.png', 'icon' => '⭐'],
+            'ligue-1'           => ['name' => 'Ligue 1', 'emblem' => 'https://crests.football-data.org/FL1.png', 'icon' => '🇫🇷'],
+            'eredivisie'        => ['name' => 'Eredivisie', 'emblem' => 'https://crests.football-data.org/ED.png', 'icon' => '🇳🇱'],
+            'copa-libertadores' => ['name' => 'Copa Libertadores', 'emblem' => 'https://crests.football-data.org/CLI.png', 'icon' => '🏆'],
+            'liga-1'            => ['name' => 'BRI Liga 1', 'emblem' => '', 'icon' => '🇮🇩'],
         ];
 
         foreach ($matches as $m) {
             $slug = $m['categorySlug'] ?? 'kompetisi-lain';
             $compName = $priorityMeta[$slug]['name'] ?? ($m['competition']['name'] ?? 'Kompetisi');
+            $emblem = ! empty($m['competition']['emblem']) ? $m['competition']['emblem'] : ($priorityMeta[$slug]['emblem'] ?? '');
             $icon = $priorityMeta[$slug]['icon'] ?? ($m['categoryIcon'] ?? '⚽');
 
             if (! isset($categories[$slug])) {
                 $categories[$slug] = [
-                    'slug'  => $slug,
-                    'name'  => $compName,
-                    'icon'  => $icon,
-                    'count' => 0,
+                    'slug'   => $slug,
+                    'name'   => $compName,
+                    'emblem' => $emblem,
+                    'icon'   => $icon,
+                    'count'  => 0,
                 ];
+            } else {
+                if (empty($categories[$slug]['emblem']) && ! empty($emblem)) {
+                    $categories[$slug]['emblem'] = $emblem;
+                }
             }
             $categories[$slug]['count']++;
         }
@@ -646,21 +654,23 @@ class FootballMatchService
     }
 
     /**
-     * Data fallback terkurasi dengan tanggal besok jika API kosong
+     * Data fallback terkurasi dengan skor selesai untuk kemarin/hari ini jika API kosong
      */
-    private function getFallbackMatches(string $tomorrowDateStr = ''): array
+    private function getFallbackMatches(string $targetDateStr = '', string $day = 'kemarin'): array
     {
-        if (empty($tomorrowDateStr)) {
+        if (empty($targetDateStr)) {
             $now = new DateTime('now', new DateTimeZone('Asia/Jakarta'));
-            $tomorrow = (clone $now)->modify('+1 day');
-            $tomorrowDateStr = $tomorrow->format('Y-m-d');
+            $targetDate = ($day === 'besok') ? (clone $now)->modify('+1 day') : (clone $now)->modify('-1 day');
+            $targetDateStr = $targetDate->format('Y-m-d');
         }
+
+        $isFinished = ($day === 'kemarin' || $day === 'hari-ini');
 
         return $this->transformMatches([
             [
                 'id'          => 500101,
-                'utcDate'     => "{$tomorrowDateStr}T14:00:00Z",
-                'status'      => 'SCHEDULED',
+                'utcDate'     => "{$targetDateStr}T14:00:00Z",
+                'status'      => $isFinished ? 'FINISHED' : 'SCHEDULED',
                 'matchday'    => 5,
                 'stage'       => 'REGULAR_SEASON',
                 'competition' => [
@@ -685,15 +695,15 @@ class FootballMatchService
                     'crest'     => 'https://crests.football-data.org/65.png',
                 ],
                 'score'       => [
-                    'winner'   => null,
-                    'fullTime' => ['home' => null, 'away' => null],
-                    'halfTime' => ['home' => null, 'away' => null],
+                    'winner'   => $isFinished ? 'HOME_TEAM' : null,
+                    'fullTime' => ['home' => $isFinished ? 2 : null, 'away' => $isFinished ? 1 : null],
+                    'halfTime' => ['home' => $isFinished ? 1 : null, 'away' => $isFinished ? 0 : null],
                 ],
             ],
             [
                 'id'          => 500102,
-                'utcDate'     => "{$tomorrowDateStr}T19:00:00Z",
-                'status'      => 'SCHEDULED',
+                'utcDate'     => "{$targetDateStr}T19:00:00Z",
+                'status'      => $isFinished ? 'FINISHED' : 'SCHEDULED',
                 'matchday'    => 5,
                 'stage'       => 'REGULAR_SEASON',
                 'competition' => [
@@ -718,15 +728,15 @@ class FootballMatchService
                     'crest'     => 'https://crests.football-data.org/81.png',
                 ],
                 'score'       => [
-                    'winner'   => null,
-                    'fullTime' => ['home' => null, 'away' => null],
-                    'halfTime' => ['home' => null, 'away' => null],
+                    'winner'   => $isFinished ? 'AWAY_TEAM' : null,
+                    'fullTime' => ['home' => $isFinished ? 1 : null, 'away' => $isFinished ? 3 : null],
+                    'halfTime' => ['home' => $isFinished ? 1 : null, 'away' => $isFinished ? 1 : null],
                 ],
             ],
             [
                 'id'          => 500103,
-                'utcDate'     => "{$tomorrowDateStr}T14:00:00Z",
-                'status'      => 'SCHEDULED',
+                'utcDate'     => "{$targetDateStr}T18:45:00Z",
+                'status'      => $isFinished ? 'FINISHED' : 'SCHEDULED',
                 'matchday'    => 4,
                 'stage'       => 'REGULAR_SEASON',
                 'competition' => [
@@ -751,9 +761,75 @@ class FootballMatchService
                     'crest'     => 'https://crests.football-data.org/98.png',
                 ],
                 'score'       => [
-                    'winner'   => null,
-                    'fullTime' => ['home' => null, 'away' => null],
-                    'halfTime' => ['home' => null, 'away' => null],
+                    'winner'   => $isFinished ? 'DRAW' : null,
+                    'fullTime' => ['home' => $isFinished ? 2 : null, 'away' => $isFinished ? 2 : null],
+                    'halfTime' => ['home' => $isFinished ? 0 : null, 'away' => $isFinished ? 1 : null],
+                ],
+            ],
+            [
+                'id'          => 500104,
+                'utcDate'     => "{$targetDateStr}T19:30:00Z",
+                'status'      => $isFinished ? 'FINISHED' : 'SCHEDULED',
+                'matchday'    => 4,
+                'stage'       => 'REGULAR_SEASON',
+                'competition' => [
+                    'id'     => 2002,
+                    'name'   => 'Bundesliga',
+                    'code'   => 'BL1',
+                    'emblem' => 'https://crests.football-data.org/BL1.png',
+                ],
+                'area'        => ['name' => 'Germany', 'flag' => 'https://crests.football-data.org/759.svg'],
+                'homeTeam'    => [
+                    'id'        => 5,
+                    'name'      => 'FC Bayern München',
+                    'shortName' => 'Bayern',
+                    'tla'       => 'FCB',
+                    'crest'     => 'https://crests.football-data.org/5.png',
+                ],
+                'awayTeam'    => [
+                    'id'        => 4,
+                    'name'      => 'Borussia Dortmund',
+                    'shortName' => 'Dortmund',
+                    'tla'       => 'BVB',
+                    'crest'     => 'https://crests.football-data.org/4.png',
+                ],
+                'score'       => [
+                    'winner'   => $isFinished ? 'HOME_TEAM' : null,
+                    'fullTime' => ['home' => $isFinished ? 3 : null, 'away' => $isFinished ? 1 : null],
+                    'halfTime' => ['home' => $isFinished ? 1 : null, 'away' => $isFinished ? 0 : null],
+                ],
+            ],
+            [
+                'id'          => 500105,
+                'utcDate'     => "{$targetDateStr}T20:00:00Z",
+                'status'      => $isFinished ? 'FINISHED' : 'SCHEDULED',
+                'matchday'    => 5,
+                'stage'       => 'REGULAR_SEASON',
+                'competition' => [
+                    'id'     => 2015,
+                    'name'   => 'Ligue 1',
+                    'code'   => 'FL1',
+                    'emblem' => 'https://crests.football-data.org/FL1.png',
+                ],
+                'area'        => ['name' => 'France', 'flag' => 'https://crests.football-data.org/773.svg'],
+                'homeTeam'    => [
+                    'id'        => 524,
+                    'name'      => 'Paris Saint-Germain FC',
+                    'shortName' => 'PSG',
+                    'tla'       => 'PSG',
+                    'crest'     => 'https://crests.football-data.org/524.png',
+                ],
+                'awayTeam'    => [
+                    'id'        => 516,
+                    'name'      => 'Olympique de Marseille',
+                    'shortName' => 'Marseille',
+                    'tla'       => 'OM',
+                    'crest'     => 'https://crests.football-data.org/516.png',
+                ],
+                'score'       => [
+                    'winner'   => $isFinished ? 'HOME_TEAM' : null,
+                    'fullTime' => ['home' => $isFinished ? 2 : null, 'away' => $isFinished ? 0 : null],
+                    'halfTime' => ['home' => $isFinished ? 1 : null, 'away' => $isFinished ? 0 : null],
                 ],
             ],
         ]);
