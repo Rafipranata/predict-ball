@@ -112,9 +112,6 @@
                                         <span class="text-slate-500 shrink-0">•</span>
                                         <span class="text-slate-400 shrink-0 text-[11px]">{{ $match['competition']['stage'] }}</span>
                                     </div>
-                                    <div class="px-2.5 py-1 rounded-md font-mono font-semibold text-[11px] border shrink-0 {{ $match['statusBadge']['color'] }}">
-                                        {{ $match['statusBadge']['label'] }}
-                                    </div>
                                 </div>
 
                                 <!-- Teams & Live/xG Scores -->
@@ -180,13 +177,9 @@
 
                                     <!-- Matchday & Tanggal Pertandingan -->
                                     <div
-                                        class="p-3.5 rounded-xl bg-[#0e1f1e] border border-[#285A48] text-xs text-slate-300 flex items-center justify-between gap-3 mt-4">
-                                        <div class="flex items-center gap-2 min-w-0">
-                                            <span class="px-2.5 py-1 rounded-lg bg-[#091413] border border-[#285A48] text-emerald-400 font-bold font-mono text-[11px] shrink-0">
-                                                {{ $match['matchdayLabel'] ?? ($match['matchday'] ? 'Matchday ' . $match['matchday'] : ($match['competition']['stage'] ?? 'Jadwal Laga')) }}
-                                            </span>
-                                        </div>
-                                        <div class="flex items-center gap-1.5 text-right text-[11px] font-mono text-slate-300 shrink-0">
+                                        class="p-3.5 rounded-xl  bg-[#0e1f1e] border border-[#285A48] text-xs  flex items-center justify-center mt-4">
+
+                                        <div class="flex items-center text-[11px] font-mono text-slate-300 shrink-0">
                                             <span class="text-white font-medium">{{ $match['fullDate'] ?? $match['wibDate'] }}</span>
                                             <span class="text-slate-500">•</span>
                                             <span class="text-emerald-400 font-semibold">{{ $match['wibTime'] }}</span>
